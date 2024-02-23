@@ -1,0 +1,261 @@
+---
+title: "MTH 404 R Project"
+author: "You Liang"
+date: "2023-04-11"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+This is just a outline and necessary steps and code of the R project. Students should add more explanations. For example, you should add more descriptions about the data visualization. More importantly, you need to write out the final regression and explain some coefficients as we did in the class.
+
+## DATA
+
+We collected the data from ``kaggle datasets" named as "KC_Housesales_Data”. The link of the data: https://www.kaggle.com/swathiachath/kc-housesales-data
+
+Online property companies offer valuations of houses using machine learning techniques. The aim of this report is to predict the house sales in King County, Washington State, USA using Multiple Linear Regression (MLR). The dataset consisted of historic data of houses sold between May 2014 to May 2015.
+
+```{r}
+library(tidyverse)
+library(corrplot)
+library(lubridate)
+library(readr)
+library(caTools)
+library(GGally)
+library(caret)
+library(leaps)
+```
+
+```{r}
+mydata = read_csv("kc_house_data.csv")
+head(mydata)
+str(mydata)
+summary(mydata)
+```
+The data contains 21 different independent variables like bedrooms, sqft_living, view, grade, etc and the dependent variable is price. The data contains 21597 observations.
+
+```{r}
+NA_values=data.frame(no_of_na_values=colSums(is.na(mydata)))
+head(NA_values,21)
+```
+
+We see that there are no missing values in this data.
+
+## EXPLORATORY DATA ANALYSIS ON THE TRAIN DATA
+
+Now we modify the data a litle and add two new columns for our better understanding. Price might depend on the age of the house and also the number of times it has been renovated. So we try to extact the age and the number of times a particular house has been renovated from our train data. This step is optional.
+
+```{r}
+date_sale=mdy(mydata$date)
+mydata$sale_date_year=as.integer(year(date_sale))
+mydata$age=mydata$sale_date_year-mydata$yr_built
+
+mydata$reno=ifelse(mydata$yr_renovated==0,0,1)
+mydata$reno=as.factor(mydata$reno)
+```
+
+### Training and test data
+
+We divide the data to be the training set (80%) and test set (20%). If we have already the training and test set provided, then we do not need to add this step. 
+
+```{r}
+set.seed(123)   #  set seed to be your student number
+n <- nrow(mydata)
+ntest <- trunc(0.2*n)
+testid <- sample (1:n, ntest)
+train_data <- mydata[-testid , ]
+test_data <- mydata[testid , ]
+## train_data <- read_csv("train.csv")
+## test_data <- read_csv("test.csv")
+```
+
+### Check the response variable
+
+The price is skewed to the right with several very high prices. 
+
+```{r}
+boxplot(train_data$price)
+hist (train_data$price)
+```
+
+### Determining the association between variables.
+
+We take out the correlation plot (corrplot) to understand the association of the dependent variable (price) with the independent variables.
+
+```{r}
+cor_data=data.frame(train_data[,3:21])
+correlation=cor(cor_data)
+correlation
+par(mfrow=c(1, 1))
+corrplot(correlation,method="color")
+```
+
+Price is strongly positively correlated with bathroom, Sqft_living, grade, sqft_above, sqft_living15. We use scatterplot and boxplot to visualize the relationship between price and some predictors.
+
+```{r}
+ggplot(data = train_data, aes(x = sqft_living, y = price)) +
+  geom_jitter() +  geom_smooth(method = "lm", se = FALSE)+labs(title="Scatter plot of Sqft_living and Price", x="Sqft_living",y="Price")
+
+ggplot(data = train_data, aes(x = sqft_above, y = price)) +
+  geom_jitter() +  geom_smooth(method = "lm", se = FALSE)+labs(title="Scatter plot of Sqft_above and Price", x="Sqft_living",y="Price")
+
+ggplot(data = train_data, aes(x = sqft_living15, y = price)) +
+  geom_jitter() +  geom_smooth(method = "lm", se = FALSE)+labs(title="Scatter plot of Sqft_living15 and Price", x="Sqft_living",y="Price")
+```
+
+```{r}
+boxplot(price~grade,data=train_data,main="Different boxplots", xlab="grade",ylab="price",col="orange",border="brown")
+```
+
+Check the new added variables:
+
+```{r}
+ggplot(data = train_data, aes(x = age, y = price)) +
+  geom_jitter() +  geom_smooth(method = "lm", se = FALSE)+labs(title="Scatter plot of Age and Price", x="Age",y="Price")
+
+boxplot(price~reno,data=train_data,main="Different boxplots", xlab="reno",ylab="price",col="orange",border="brown")
+```
+
+### Removing outlier could be optional
+
+We see that we have a significantly large number of outliers.
+
+Treating or altering the outlier/extreme values in genuine observations is not a standard operating procedure. However, it is essential to understand their impact on our predictive models.
+
+To better understand the implications of outliers better, we should compare the fit of a simple linear regression model on the dataset with and without outliers.
+For this we first extract outliers from the data and then obtain the data without the outliers.
+
+```{r}
+outliers=boxplot(train_data$price,plot=FALSE)$out
+outliers_data=train_data[which(train_data$price %in% outliers),]
+train_data1= train_data[-which(train_data$price %in% outliers),]
+```
+
+Now plot Now we plot the data with and without outliers.
+
+```{r}
+par(mfrow=c(1, 2))
+plot(train_data$bedrooms, train_data$price, main="With Outliers", xlab="bedrooms", ylab="price", pch="*", col="red", cex=2)
+abline(lm(price ~ bedrooms, data=train_data), col="blue", lwd=3, lty=2)
+# Plot of original data without outliers. Note the change of slope.
+plot(train_data1$bedrooms, train_data1$price, main="Outliers removed", xlab="bedrooms", ylab="price", pch="*", col="red", cex=2)
+abline(lm(price ~bedrooms, data=train_data1), col="blue", lwd=3, lty=2)
+```
+
+## MODELING
+
+We first use the entire data.
+
+```{r}
+train_data.m <- train_data[, -c(1, 2, 15, 16, 17, 22)] %>% mutate(waterfront=as.factor(waterfront), view=as.factor(view), condition=as.factor(condition), reno = as.factor(reno))
+str (train_data.m) 
+ncol(train_data.m)
+```
+
+```{r}
+model.full <- lm (formula = price ~ ., data = train_data.m)
+summary(model.full)
+```
+
+```{r}
+models <- regsubsets(price~., data = train_data.m, nvmax = 23)
+summary(models)
+
+res.sum <- summary(models)
+data.frame(
+  Adj.R2 = which.max(res.sum$adjr2),
+  CP = which.min(res.sum$cp),
+  BIC = which.min(res.sum$bic)
+)
+```
+
+```{r}
+# id: model id
+# object: regsubsets object
+# data: data used to fit regsubsets
+# outcome: outcome variable
+get_model_formula <- function(id, object, outcome){
+  # get models data
+  models <- summary(object)$which[id,-1]
+  # Get outcome variable
+  #form <- as.formula(object$call[[2]])
+  #outcome <- all.vars(form)[1]
+  # Get model predictors
+  predictors <- names(which(models == TRUE))
+  predictors <- paste(predictors, collapse = "+")
+  # Build model formula
+  as.formula(paste0(outcome, "~", predictors))
+}
+
+get_model_formula(21, models, "Price")
+```
+
+```{r}
+model1 <- lm (price ~ bedrooms + bathrooms + sqft_living + sqft_lot + floors + waterfront + view + condition + grade + sqft_basement + lat + long + sqft_living15 + sqft_lot15 + age + reno, data = train_data.m)
+summary(model1)
+```
+
+```{r}
+model2 <- lm (price ~ bedrooms + bathrooms + sqft_living + sqft_lot + floors + waterfront + view + condition + grade + sqft_basement + lat + long + sqft_living15 + sqft_lot15 + age + reno + bathrooms*grade + grade*sqft_living15 + grade*sqft_lot15 + lat*long, data = train_data.m)
+summary(model2)
+```
+
+### PREDICTION ON THE TEST DATA
+
+```{r}
+test_data.m <- test_data[, -c(1, 2, 15, 16, 17, 22)] %>% mutate(waterfront=as.factor(waterfront), view=as.factor(view), condition=as.factor(condition), reno = as.factor(reno))
+```
+
+```{r}
+pred_test=predict(newdata=test_data.m,model2)
+
+tally_table_1=data.frame(actual=test_data.m$price, predicted=pred_test)
+
+mean(abs(test_data.m$price - pred_test))
+```
+
+## Compare with one-layer forward neural network
+
+```{r}
+x <- model.matrix(price ~ . - 1, data = train_data.m) %>% scale ()
+y <- train_data.m$price
+```
+
+```{r}
+library(keras)
+modnn <- keras_model_sequential () %>%
+  layer_dense(units = 100, activation = "relu",
+              input_shape = ncol(x)) %>%
+  layer_dropout(rate = 0.2) %>%
+  layer_dense(units = 1)
+
+modnn %>% compile(loss = "mse",
+                  optimizer = optimizer_rmsprop (),
+                  metrics = list("mean_absolute_error")
+)
+```
+
+```{r}
+x.test <- model.matrix(price ~ . - 1, data = test_data.m) %>% scale ()
+y.test <- test_data.m$price
+
+history <- modnn %>% fit(
+  x.test, y.test, epochs = 1000, batch_size = 32,
+  validation_data = list(x.test, y.test)
+)
+
+npred <- predict(modnn , x.test)
+mean(abs(y.test - npred))
+```
+
+Neural network has similar test error than the multiple linear regression. But if we have time, we can tune the parameters to have a better neural network.
+
+
+
+
+
+
