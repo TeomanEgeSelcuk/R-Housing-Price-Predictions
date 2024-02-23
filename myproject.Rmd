@@ -1,6 +1,6 @@
 ---
 title: "MTH 404 R Project"
-author: "You Liang"
+author: "Teoman Selcuk"
 date: "2023-04-11"
 output:
   pdf_document: default
